@@ -64,7 +64,7 @@ from opentelemetry.semconv.attributes.user_agent_attributes import (
     USER_AGENT_ORIGINAL,
 )
 from opentelemetry.test.test_base import TestBase
-from opentelemetry.trace import StatusCode
+from opentelemetry.trace import StatusCode, get_current_span
 from opentelemetry.util._importlib_metadata import entry_points
 from opentelemetry.util.http import (
     OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS,
@@ -1066,18 +1066,32 @@ async def test_generic_exception_records_error_new_semconv(
     AioHttpServerInstrumentor().uninstrument()
 
 
+def _recording_middlewares(calls):
+    def make(name):
+        @aiohttp.web.middleware
+        async def _middleware(request, handler):
+            calls.append((name, get_current_span().is_recording()))
+            return await handler(request)
+
+        return _middleware
+
+    return [make("first"), make("second")]
+
+
 @pytest.mark.asyncio
 async def test_shared_middlewares_list(test_base: TestBase, aiohttp_server):
     """A middlewares list shared between apps must not be modified."""
+    calls = []
+    user_middlewares = _recording_middlewares(calls)
     AioHttpServerInstrumentor().instrument()
     try:
-        middlewares = []
+        middlewares = list(user_middlewares)
         servers = []
         for _ in range(2):
             app = aiohttp.web.Application(middlewares=middlewares)
             app.router.add_get("/test-path", default_handler)
             servers.append(await aiohttp_server(app))
-        assert not middlewares
+        assert middlewares == user_middlewares
 
         async with aiohttp.ClientSession() as session:
             for server in servers:
@@ -1085,15 +1099,36 @@ async def test_shared_middlewares_list(test_base: TestBase, aiohttp_server):
                     assert response.status == 200
 
         assert len(test_base.get_finished_spans()) == 2
+        # user middlewares are kept, in order, and run inside the server span
+        assert calls == [("first", True), ("second", True)] * 2
     finally:
         AioHttpServerInstrumentor().uninstrument()
 
 
 @pytest.mark.asyncio
 async def test_tuple_middlewares(test_base: TestBase, aiohttp_server):
+    calls = []
     AioHttpServerInstrumentor().instrument()
     try:
-        app = aiohttp.web.Application(middlewares=())
+        app = aiohttp.web.Application(middlewares=tuple(_recording_middlewares(calls)))
+        app.router.add_get("/test-path", default_handler)
+        server = await aiohttp_server(app)
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://{server.host}:{server.port}/test-path") as response:
+                assert response.status == 200
+
+        assert len(test_base.get_finished_spans()) == 1
+        assert calls == [("first", True), ("second", True)]
+    finally:
+        AioHttpServerInstrumentor().uninstrument()
+
+
+@pytest.mark.asyncio
+async def test_none_middlewares(test_base: TestBase, aiohttp_server):
+    AioHttpServerInstrumentor().instrument()
+    try:
+        app = aiohttp.web.Application(middlewares=None)
         app.router.add_get("/test-path", default_handler)
         server = await aiohttp_server(app)
 

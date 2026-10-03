@@ -504,7 +504,8 @@ def create_instrumented_application(
 
         def __init__(self, *args, **kwargs):
             # build a new list, as the caller's may be shared with other apps
-            kwargs["middlewares"] = [_middleware, *kwargs.pop("middlewares", ())]
+            # (aiohttp also accepts any iterable or None here)
+            kwargs["middlewares"] = [_middleware, *(kwargs.pop("middlewares", None) or ())]
             super().__init__(*args, **kwargs)
 
     return _InstrumentedApplication
