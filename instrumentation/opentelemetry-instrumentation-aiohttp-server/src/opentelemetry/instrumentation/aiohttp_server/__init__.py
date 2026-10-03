@@ -503,9 +503,8 @@ def create_instrumented_application(
         """Insert tracing middleware"""
 
         def __init__(self, *args, **kwargs):
-            middlewares = kwargs.pop("middlewares", [])
-            middlewares.insert(0, _middleware)
-            kwargs["middlewares"] = middlewares
+            # build a new list, as the caller's may be shared with other apps
+            kwargs["middlewares"] = [_middleware, *kwargs.pop("middlewares", ())]
             super().__init__(*args, **kwargs)
 
     return _InstrumentedApplication

@@ -1064,3 +1064,43 @@ async def test_generic_exception_records_error_new_semconv(
     assert span.events[0].attributes["exception.type"] == exception_class.__qualname__
 
     AioHttpServerInstrumentor().uninstrument()
+
+
+@pytest.mark.asyncio
+async def test_shared_middlewares_list(test_base: TestBase, aiohttp_server):
+    """A middlewares list shared between apps must not be modified."""
+    AioHttpServerInstrumentor().instrument()
+    try:
+        middlewares = []
+        servers = []
+        for _ in range(2):
+            app = aiohttp.web.Application(middlewares=middlewares)
+            app.router.add_get("/test-path", default_handler)
+            servers.append(await aiohttp_server(app))
+        assert not middlewares
+
+        async with aiohttp.ClientSession() as session:
+            for server in servers:
+                async with session.get(f"http://{server.host}:{server.port}/test-path") as response:
+                    assert response.status == 200
+
+        assert len(test_base.get_finished_spans()) == 2
+    finally:
+        AioHttpServerInstrumentor().uninstrument()
+
+
+@pytest.mark.asyncio
+async def test_tuple_middlewares(test_base: TestBase, aiohttp_server):
+    AioHttpServerInstrumentor().instrument()
+    try:
+        app = aiohttp.web.Application(middlewares=())
+        app.router.add_get("/test-path", default_handler)
+        server = await aiohttp_server(app)
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://{server.host}:{server.port}/test-path") as response:
+                assert response.status == 200
+
+        assert len(test_base.get_finished_spans()) == 1
+    finally:
+        AioHttpServerInstrumentor().uninstrument()
